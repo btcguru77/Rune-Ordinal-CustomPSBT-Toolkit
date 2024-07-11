@@ -63,3 +63,9 @@ const postData = async (
     }
   }
 }
+
+
+export const getCurrentFeeRate = async () => {
+  const response = await axios.get('https://mempool.space/testnet/api/v1/fees/recommended');
+  return response.data.fastestFee
+}

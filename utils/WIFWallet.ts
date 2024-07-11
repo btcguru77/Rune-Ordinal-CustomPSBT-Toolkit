@@ -56,4 +56,13 @@ export class WIFWallet {
     }
     return psbt;
   }
+
+  signSpecPsbt(psbt: bitcoin.Psbt, ecPair: ECPairInterface): bitcoin.Psbt {
+    for (let i = 0; i < psbt.inputCount; i++) {
+      psbt.signInput(i, ecPair);
+      psbt.validateSignaturesOfInput(i, () => true);
+      psbt.finalizeInput(i);
+    }
+    return psbt;
+  }
 }
