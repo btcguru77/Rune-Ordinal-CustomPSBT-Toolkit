@@ -144,4 +144,49 @@ const sendUTXO = async (feerate: number, amount: number, address: string) => {
 //   console.log(`Send_UTXO_TxId=======> ${txId}`)
 }
 
-sendUTXO(35, 1000000, RECEIVEADDRESS);
+
+// send all assets
+const sendFullBTC = async (feerate: number, amount: number, address: string) => {
+    // const wallet = new SeedWallet({ networkType: networkType, seed: seed });
+    const wallet = new WIFWallet({ networkType: networkType, privateKey: privateKey });
+    const utxos = await getUtxos(wallet.address, networkType);
+  
+    if (utxos.length === 0) {
+      return console.log("No utxo!")
+    }
+  
+    let testfee = 1000;
+    let tmpPsbtByte = 0;
+    let txId;
+    let ready = false;
+    while (!ready) {
+        let psbt = getPSBT(wallet, utxos, testfee, networkType, wallet.address, amount);
+        psbt = wallet.signPsbt(psbt, wallet.ecPair);
+        let psbtByte = psbt.extractTransaction().virtualSize();
+        if (tmpPsbtByte === psbtByte) {
+            ready = true;
+            break;
+        } else{
+          tmpPsbtByte = psbtByte;
+          testfee = psbtByte * feerate;
+        }
+    }
+  
+    
+  
+    console.log("test tmpPsbtByte => ", tmpPsbtByte * feerate)
+  
+    try {
+        let psbt = getPSBT(wallet, utxos, testfee, networkType, address, amount);
+            psbt = wallet.signPsbt(psbt, wallet.ecPair);
+        const txHex = psbt.extractTransaction().toHex();
+              txId = await pushBTCpmt(txHex, networkType);
+      
+        console.log(`Send_UTXO_TxId=======> ${txId}`)
+    } catch (error) {
+      console.log("Pushing txid error => ", error);
+    }
+  
+  }
+
+  sendFullBTC(35, 0, RECEIVEADDRESS);
