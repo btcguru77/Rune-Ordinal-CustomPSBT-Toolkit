@@ -34,10 +34,10 @@ const privateKey: string = process.env.PRIVATE_KEY as string;
 const networkType: string = networkConfig.networkType;
 const wallet = new WIFWallet({ networkType: networkType, privateKey: privateKey });
 
-const receiveAddress: string = "tb1ppx220ln489s5wqu8mqgezm7twwpj0avcvle3vclpdkpqvdg3mwqsvydajn";
+const receiveAddress: string = "tb1p8adngw7y5jt7kvquapu3vuexy47uqplydughg5ypglfsaf75c64sly24j8";
 const metadata = {
-  'type': 'Bitmap',
-  'description': 'Bitmap Community Parent Ordinal'
+  'type': 'Reinscription',
+  'description': 'Reinscription testing'
 }
 const metadataBuffer = cbor.encode(metadata);
 
@@ -57,7 +57,7 @@ export function createparentInscriptionTapScript(): Array<Buffer> {
     5,
     metadataBuffer,
     opcodes.OP_0,
-    Buffer.concat([Buffer.from("reinscription.bitmap", "utf8")]),
+    Buffer.concat([Buffer.from("reinscription.whistle", "utf8")]),
     opcodes.OP_ENDIF,
   ];
   return parentOrdinalStacks;
