@@ -115,7 +115,6 @@ export const getVirtulByte = async (redeem: any, ordinal_p2tr: any) => {
     console.log("getting virtualsize error => ", error)
     return 0;
   }
-
 }
 
 export const getChildVirtulByte = async (redeem: any, ordinal_p2tr: any) => {

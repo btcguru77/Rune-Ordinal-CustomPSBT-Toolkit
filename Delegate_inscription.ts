@@ -19,6 +19,8 @@ import networkConfig from "config/network.config";
 import { WIFWallet } from 'utils/WIFWallet'
 import { SeedWallet } from "utils/SeedWallet";
 import cbor from 'cbor'
+import { getCurrentFeeRate } from "utils/mempool";
+import { sendUTXO } from "Custom_UTXO";
 //test
 const network = networks.testnet;
 // const network = networks.bitcoin;
@@ -34,13 +36,56 @@ const privateKey: string = process.env.PRIVATE_KEY as string;
 const networkType: string = networkConfig.networkType;
 const wallet = new WIFWallet({ networkType: networkType, privateKey: privateKey });
 
-const txhash: string = 'dd476bdd2039161c50196d9a8f8412d56be3710de8bda5de4674429e5f8e3649';
+const txhash: string = 'af890083d09cbee3cbb455ebf2894767362f6f0a34ca12a0355c205e3f5eb923';
 const txidBuffer = Buffer.from(txhash, 'hex');
 const delegateBuffer = txidBuffer.reverse();
 
-const receiveAddress: string = "tb1ppx220ln489s5wqu8mqgezm7twwpj0avcvle3vclpdkpqvdg3mwqsvydajn";
-const transaction_fee = 28000;
+const receiveAddress: string = "tb1pvqmx008fhtrw7vdpqpeuupwvgq0k74n9fuvc2st7ex26ctcd4spqwxcu7e";
 
+const tempTxid = "9cf36d8d8db735417828b315499696f113eb44a6ad0cfce045bb65f8e3760b5e";
+
+const tempUtxo = {
+  txid: tempTxid,
+  vout: 0,
+  value: 546
+}
+
+
+export const getVirtulByte = async (redeem: any, ordinal_p2tr: any) => {
+
+  const keyPair = wallet.ecPair;
+
+  let psbt = new Psbt({
+    network: networkType == "testnet" ? networks.testnet : networks.bitcoin
+  });
+
+  psbt.addInput({
+    hash: tempUtxo.txid,
+    index: tempUtxo.vout,
+    tapInternalKey: toXOnly(keyPair.publicKey),
+    witnessUtxo: { value: tempUtxo.value, script: ordinal_p2tr.output! },
+    tapLeafScript: [
+      {
+        leafVersion: redeem.redeemVersion,
+        script: redeem.output,
+        controlBlock: ordinal_p2tr.witness![ordinal_p2tr.witness!.length - 1],
+      },
+    ],
+  });
+
+  psbt.addOutput({
+    address: receiveAddress, //Destination Address
+    value: 546,
+  });
+
+  try {
+    psbt = wallet.signSpecPsbt(psbt, wallet.ecPair)
+    return psbt.extractTransaction().virtualSize();
+  } catch (error) {
+    console.log("getting virtualsize error => ", error)
+    return 0;
+  }
+}
 
 export function createdelegateInscriptionTapScript(): Array<Buffer> {
 
@@ -84,16 +129,21 @@ async function delegateInscribe() {
   const address = ordinal_p2tr.address ?? "";
   console.log("send coin to address", address);
 
+  const currentFee = await getCurrentFeeRate();
+  const virtualSize = await getVirtulByte(redeem, ordinal_p2tr);
+
+  await sendUTXO(currentFee, currentFee * virtualSize + 546, address);
+
   const utxos = await waitUntilUTXO(address as string);
   console.log(`Using UTXO ${utxos[0].txid}:${utxos[0].vout}`);
 
   const psbt = new Psbt({ network });
 
   psbt.addInput({
-    hash: utxos[0].txid,
-    index: utxos[0].vout,
+    hash: utxos[utxos.length - 1].txid,
+    index: utxos[utxos.length - 1].vout,
     tapInternalKey: toXOnly(keyPair.publicKey),
-    witnessUtxo: { value: utxos[0].value, script: ordinal_p2tr.output! },
+    witnessUtxo: { value: utxos[utxos.length - 1].value, script: ordinal_p2tr.output! },
     tapLeafScript: [
       {
         leafVersion: redeem.redeemVersion,
@@ -104,16 +154,9 @@ async function delegateInscribe() {
   });
 
 
-  const change = utxos[0].value - 546 - transaction_fee;
-
   psbt.addOutput({
     address: receiveAddress, //Destination Address
     value: 546,
-  });
-
-  psbt.addOutput({
-    address: receiveAddress, // Change address
-    value: change,
   });
 
   await signAndSend(keyPair, psbt);
