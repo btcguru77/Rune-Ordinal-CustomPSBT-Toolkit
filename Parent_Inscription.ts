@@ -460,8 +460,6 @@ export async function childInscribe() {
   await signAndSend(keyPair, psbt);
 }
 
-childInscribe()
-
 export async function signAndSend(
   keypair: BTCSigner,
   psbt: Psbt,

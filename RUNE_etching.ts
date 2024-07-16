@@ -28,6 +28,9 @@ import networkConfig from "config/network.config";
 
 import { SeedWallet } from "utils/SeedWallet";
 import { WIFWallet } from 'utils/WIFWallet'
+import { getCurrentFeeRate, getUtxos } from "utils/mempool";
+import { getFeeForSimplePsbt } from "Parent_Inscription";
+import { sendUTXO } from "Custom_UTXO";
 
 initEccLib(ecc as any);
 declare const window: any;
@@ -40,6 +43,15 @@ const networkType: string = networkConfig.networkType;
 
 const privateKey: string = process.env.PRIVATE_KEY as string;
 const wallet = new WIFWallet({ networkType: networkType, privateKey: privateKey });
+
+// Temp txid
+const tempTxid = "9cf36d8d8db735417828b315499696f113eb44a6ad0cfce045bb65f8e3760b5e";
+
+const tempUtxo = {
+  txid: tempTxid,
+  vout: 0,
+  value: 546
+}
 
 async function etching() {
 
@@ -98,27 +110,9 @@ async function etching() {
     network,
   });
 
-  const address = script_p2tr.address ?? "";
-  console.log("send coin to address", address);
 
-  const utxos = await waitUntilUTXO(address as string);
-  console.log(`Using UTXO ${utxos[0].txid}:${utxos[0].vout}`);
-
-  const psbt = new Psbt({ network });
-
-  psbt.addInput({
-    hash: utxos[0].txid,
-    index: utxos[0].vout,
-    witnessUtxo: { value: utxos[0].value, script: script_p2tr.output! },
-    tapLeafScript: [
-      {
-        leafVersion: etching_redeem.redeemVersion,
-        script: etching_redeem.output,
-        controlBlock: etching_p2tr.witness![etching_p2tr.witness!.length - 1],
-      },
-    ],
-  });
-
+  ///////////////////////////////////////
+  
   const rune = Rune.fromName(name);
 
   const terms = new Terms(
@@ -140,28 +134,106 @@ async function etching() {
 
   const stone = new Runestone([], some(etching), none(), none());
 
+  const address = script_p2tr.address ?? "";
+
+  
+  const currentFeeRate = await getCurrentFeeRate();
+  const virtualSize = await getVirtulByte(etching_redeem, script_p2tr, etching_p2tr, stone);
+  console.log("🚀 ~ etching ~ virtualSize:", virtualSize)
+  const allUtxos = await getUtxos(wallet.address, networkType);
+  const simplePsbt = await getFeeForSimplePsbt(allUtxos[0])
+  if (!virtualSize || !simplePsbt) return console.log("Invaid psbt")
+
+  console.log("needed fee => ", currentFeeRate * virtualSize)
+
+  await sendUTXO(currentFeeRate, currentFeeRate * virtualSize + 546, address);
+
+  console.log("send coin to address", address);
+
+  const utxos = await waitUntilUTXO(address as string);
+  console.log(`Using UTXO ${utxos}`);
+
+  const psbt = new Psbt({ network });
+
+
+  psbt.addInput({
+    hash: utxos[utxos.length - 1].txid,
+    index: utxos[utxos.length - 1].vout,
+    witnessUtxo: { value: utxos[utxos.length - 1].value, script: script_p2tr.output! },
+    tapLeafScript: [
+      {
+        leafVersion: etching_redeem.redeemVersion,
+        script: etching_redeem.output,
+        controlBlock: etching_p2tr.witness![etching_p2tr.witness!.length - 1],
+      },
+    ],
+  });
+
+  
+
   psbt.addOutput({
     script: stone.encipher(),
     value: 0,
   });
 
-  const change = utxos[0].value - 546 - fee;
 
   psbt.addOutput({
-    address: "tb1ppx220ln489s5wqu8mqgezm7twwpj0avcvle3vclpdkpqvdg3mwqsvydajn", // change address
+    address: "tb1p5yjm3fkr6n4rumfjm5c5rsu7c9uc4av847p0cu2n8vfdv05pph9smdjrt3", // change address
     value: 546,
   });
 
-  psbt.addOutput({
-    address: "tb1ppx220ln489s5wqu8mqgezm7twwpj0avcvle3vclpdkpqvdg3mwqsvydajn", // change address
-    value: change,
-  });
 
   await signAndSend(keyPair, psbt, address as string);
 }
 
 // main
 etching();
+
+
+export const getVirtulByte = async (redeem: any, script_p2tr: any , etching_p2tr: any, stone: any) => {
+
+  let psbt = new Psbt({ network });
+
+  psbt.addInput({
+    hash: tempUtxo.txid,
+    index: tempUtxo.vout,
+    witnessUtxo: { value: tempUtxo.value, script: script_p2tr.output! },
+    tapLeafScript: [
+      {
+        leafVersion: redeem.redeemVersion,
+        script: redeem.output,
+        controlBlock: etching_p2tr.witness![etching_p2tr.witness!.length - 1],
+      },
+    ],
+  });
+
+  
+
+  psbt.addOutput({
+    script: stone.encipher(),
+    value: 0,
+  });
+
+  const change = tempUtxo.value - 546;
+
+  psbt.addOutput({
+    address: "tb1p5yjm3fkr6n4rumfjm5c5rsu7c9uc4av847p0cu2n8vfdv05pph9smdjrt3", // change address
+    value: 546,
+  });
+
+  psbt.addOutput({
+    address: wallet.address, // change address
+    value: change,
+  });
+
+  try {
+    psbt = wallet.signSpecPsbt(psbt, wallet.ecPair)
+    return psbt.extractTransaction().virtualSize();
+  } catch (error) {
+    console.log("getting virtualsize error => ", error)
+    return 0;
+  }
+}
 
 const blockstream = new axios.Axios({
   baseURL: `https://mempool.space/testnet/api`,
@@ -211,8 +283,8 @@ export async function signAndSend(
     const tx = psbt.extractTransaction();
     console.log(`Broadcasting Transaction Hex: ${tx.toHex()}`);
     console.log(tx.virtualSize())
-    // const txid = await broadcast(tx.toHex());
-    // console.log(`Success! Txid is ${txid}`);
+    const txid = await broadcast(tx.toHex());
+    console.log(`Success! Txid is ${txid}`);
   } else {
     // in browser
 
