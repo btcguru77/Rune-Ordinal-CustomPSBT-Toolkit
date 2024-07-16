@@ -19,6 +19,7 @@ import networkConfig from "config/network.config";
 import { WIFWallet } from 'utils/WIFWallet'
 import { SeedWallet } from "utils/SeedWallet";
 import cbor from 'cbor'
+import { getCurrentFeeRate, getUtxos } from "utils/mempool";
 //test
 const network = networks.testnet;
 // const network = networks.bitcoin;
@@ -34,11 +35,22 @@ const privateKey: string = process.env.PRIVATE_KEY as string;
 const networkType: string = networkConfig.networkType;
 const wallet = new WIFWallet({ networkType: networkType, privateKey: privateKey });
 
-const receiveAddress: string = "tb1p8adngw7y5jt7kvquapu3vuexy47uqplydughg5ypglfsaf75c64sly24j8";
+const receiveAddress: string = "tb1pntrn45rwhrfv7dlqjjkw6keg7hex2zc598sekzdda3yzxfjstpfs4y8qcx";
 const metadata = {
   'type': 'Reinscription',
   'description': 'Reinscription testing'
 }
+
+// get the info uding unisat api 
+// https://open-api-testnet.unisat.io/v1/indexer/inscription/info/225ec6b10e805095451fd8b6068dd7cd190bf2a344d76d0e25520c3d3b40c199i0
+const reinscriptionId = "f99f8f3ce05b56ac0868d24e1c029531c69df7b43351e93da0b04acca3fa8d7c";
+
+const tempUtxo = {
+  txid: reinscriptionId,
+  vout: 0,
+  value: 546
+}
+
 const metadataBuffer = cbor.encode(metadata);
 
 export function createparentInscriptionTapScript(): Array<Buffer> {
@@ -57,17 +69,125 @@ export function createparentInscriptionTapScript(): Array<Buffer> {
     5,
     metadataBuffer,
     opcodes.OP_0,
-    Buffer.concat([Buffer.from("reinscription.whistle", "utf8")]),
+    Buffer.concat([Buffer.from("reinscription.whistle.test", "utf8")]),
     opcodes.OP_ENDIF,
   ];
   return parentOrdinalStacks;
 }
 
+export const getEstimateFee = async (redeem: any, ordinal_p2tr: any) => {
+  let psbt = new Psbt({ network });
+
+  const currentFeeRate = await getCurrentFeeRate();
+
+  psbt.addInput({
+    hash: tempUtxo.txid,
+    index: tempUtxo.vout,
+    tapInternalKey: toXOnly(wallet.ecPair.publicKey),
+    witnessUtxo: { value: tempUtxo.value, script: ordinal_p2tr.output! },
+    tapLeafScript: [
+      {
+        leafVersion: redeem.redeemVersion,
+        script: redeem.output,
+        controlBlock: ordinal_p2tr.witness![ordinal_p2tr.witness!.length - 1],
+      },
+    ],
+  });
+
+  psbt.addOutput({
+    address: receiveAddress, //Destination Address
+    value: 546,
+  });
+
+  psbt = wallet.signSpecPsbt(psbt, wallet.ecPair)
+
+  return currentFeeRate * psbt.extractTransaction().virtualSize();
+
+}
+
+export const getFeeforFeePsbt = async (utxos: any[]) => {
+  const currentFeeRate = await getCurrentFeeRate()
+  let psbt = new Psbt({ network });
+  psbt.addInput({
+    hash: utxos[0].txid,
+    index: utxos[0].vout,
+    witnessUtxo: {
+      value: utxos[0].value,
+      script: wallet.output,
+    },
+    tapInternalKey: toXOnly(wallet.ecPair.publicKey),
+  });
+  let totalAmount = 0;
+  for (let i = 1; i < utxos.length; i++) {
+    const utxo = utxos[i];
+    psbt.addInput({
+      hash: utxo.txid,
+      index: utxo.vout,
+      witnessUtxo: {
+        value: utxo.value,
+        script: wallet.output,
+      },
+      tapInternalKey: toXOnly(wallet.ecPair.publicKey),
+    });
+    totalAmount += utxo.value
+  }
+
+  console.log("total amount => ", totalAmount)
+
+  
+  psbt.addOutput({
+    address: wallet.address,
+    value: 546
+  })
+
+  psbt.addOutput({
+    address: receiveAddress, //Destination Address
+    value: totalAmount - 1000,
+  });
+
+  psbt = wallet.signPsbt(psbt, wallet.ecPair);
+
+  return currentFeeRate * psbt.extractTransaction().virtualSize();
+
+}
+
+// Get suitable utxos
+export const getMinimalUtxos = async (UTXOs: any, totalBTC: number) => {
+  // Sort the array in descending order
+  UTXOs.sort((a: any, b: any) => b.value - a.value);
+
+  let sum = 0;
+  let result = [];
+  // Traverse the array and keep adding elements until the sum is >= x
+  for (let i = 0; i < UTXOs.length; i++) {
+    sum += UTXOs[i].value;
+    result.push(UTXOs[i]);
+    if (sum >= totalBTC) {
+      break;
+    }
+  }
+  // If the sum is still less than x, return an empty array
+  if (sum < totalBTC) {
+    return { result: [], sum };
+  }
+  return { result, sum };
+}
+
+export const filterBtcUtxo = async (UTXOs: any) => {
+  const utxos = UTXOs.filter((utxo: any) => {
+    return utxo.value !== 546
+  })
+  return utxos
+}
+
 async function reInscribe() {
   const keyPair = wallet.ecPair;
+  console.log("🚀 ~ reInscribe ~ keyPair:")
   const parentOrdinalStack = createparentInscriptionTapScript();
+  console.log("🚀 ~ reInscribe ~ parentOrdinalStack:")
 
   const ordinal_script = script.compile(parentOrdinalStack);
+  console.log("🚀 ~ reInscribe ~ ordinal_script:")
 
   const scriptTree: Taptree = {
     output: ordinal_script,
@@ -89,66 +209,74 @@ async function reInscribe() {
   console.log("Sending coin to address", address);
 
   const SendOrdinalsPsbt = new Psbt({ network });
-  
-  const sendOrdinalPsbtFee = 30000;
+
+  const sendOrdinalPsbtFee = await getEstimateFee(redeem, ordinal_p2tr);
+  const currentFeeRate = await getCurrentFeeRate();
+  console.log("🚀 ~ reInscribe ~ currentFeeRate:", currentFeeRate)
+  const allUtxos = await getUtxos(wallet.address, networkType);
+  const btcUtxos = await filterBtcUtxo(allUtxos);
+  const feeUtxo = await getMinimalUtxos(btcUtxos, sendOrdinalPsbtFee + 546);
 
   const SendUtxos: Array<any> = [
     {
-      txid: '7402984dae838f6700b561f425aacac82b91bc5924fb853631af65f0431cc76a',
+      txid: reinscriptionId,
       vout: 0,
       value: 546
-    },
-    {
-      txid: 'ea4303aaa2c7939931a2ba129c9fc915d1905d441f2a74b6cd694c71665c7682',
-      vout: 2,
-      value: 129454
-    }  
+    }
   ]
-  
+
+  for (let i = 0; i < feeUtxo.result.length; i++) {
+    const utxo = feeUtxo.result[i];
+    SendUtxos.push(utxo);
+  }
+
+  const feeForFeePsbt = await getFeeforFeePsbt(SendUtxos);
+
   SendOrdinalsPsbt.addInput({
     hash: SendUtxos[0].txid,
-    index: SendUtxos[0].vout,
+    index: 0,
     witnessUtxo: {
-      value: SendUtxos[0].value,
+      value: 546,
       script: wallet.output,
     },
-    tapInternalKey: toXOnly(keyPair.publicKey),
+    tapInternalKey: toXOnly(wallet.ecPair.publicKey),
   });
-  
-  SendOrdinalsPsbt.addInput({
-    hash: SendUtxos[1].txid,
-    index: SendUtxos[1].vout,
-    witnessUtxo: {
-      value: SendUtxos[1].value,
-      script: wallet.output,
-    },
-    tapInternalKey: toXOnly(keyPair.publicKey),
-  });
+
+  for (let i = 1; i < SendUtxos.length; i++) {
+    const utxo = SendUtxos[i];
+
+    SendOrdinalsPsbt.addInput({
+      hash: utxo.txid,
+      index: utxo.vout,
+      witnessUtxo: {
+        value: utxo.value,
+        script: wallet.output,
+      },
+      tapInternalKey: toXOnly(wallet.ecPair.publicKey),
+    });
+  }
+
 
   SendOrdinalsPsbt.addOutput({
     address: address, //Destination Address
-    value: 70000,
-  });
-
-  const SendOrdinalUtxoChange = SendUtxos[0].value + SendUtxos[1].value - 70000 - sendOrdinalPsbtFee;
+    value: 546 + sendOrdinalPsbtFee
+  })
 
   SendOrdinalsPsbt.addOutput({
-    address: receiveAddress, //Destination Address
-    value: SendOrdinalUtxoChange,
+    address: wallet.address, 
+    value: feeUtxo.sum - feeForFeePsbt - sendOrdinalPsbtFee,
   });
 
   await SendUtxoSignAndSend(keyPair, SendOrdinalsPsbt);
-  
+
   const utxos = await waitUntilUTXO(address as string);
   const psbt = new Psbt({ network });
 
-  const transaction_fee = 30000;
-
   psbt.addInput({
-    hash: utxos[0].txid,
-    index: utxos[0].vout,
+    hash: utxos[utxos.length - 1].txid,
+    index: utxos[utxos.length - 1].vout,
     tapInternalKey: toXOnly(keyPair.publicKey),
-    witnessUtxo: { value: utxos[0].value, script: ordinal_p2tr.output! },
+    witnessUtxo: { value: utxos[utxos.length - 1].value, script: ordinal_p2tr.output! },
     tapLeafScript: [
       {
         leafVersion: redeem.redeemVersion,
@@ -157,19 +285,14 @@ async function reInscribe() {
       },
     ],
   });
-  const change = utxos[0].value - 546 - transaction_fee;
 
   psbt.addOutput({
     address: receiveAddress, //Destination Address
     value: 546,
   });
 
-  psbt.addOutput({
-    address: receiveAddress, // Change address
-    value: change,
-  });
-
-  await signAndSend(keyPair, psbt);
+  const txid = await signAndSend(keyPair, psbt);
+  console.log("🚀 ~ reInscribe ~ txid:", txid)
 }
 
 reInscribe()
@@ -185,22 +308,25 @@ export async function signAndSend(
   console.log(tx.virtualSize())
   console.log(tx.toHex())
 
-  // const txid = await broadcast(tx.toHex());
-  // console.log(`Success! Txid is ${txid}`);
+  const txid = await broadcast(tx.toHex());
+  return txid
 }
-
 
 export async function SendUtxoSignAndSend(
   keypair: BTCSigner,
   psbt: Psbt,
 ) {
   const signer = tweakSigner(keypair, { network })
+  console.log('send utxo sign and send psbts', psbt.data.inputs)
   psbt.signInput(0, signer);
   psbt.signInput(1, signer);
   psbt.finalizeAllInputs()
   const tx = psbt.extractTransaction();
-
-  console.log(tx.virtualSize())
+  console.log("🚀 ~ tx:", tx)
+  
+  const txid = await broadcast(tx.toHex());
+  console.log("🚀 ~ txid:", txid)
+  return txid
 }
 
 export async function waitUntilUTXO(address: string) {
