@@ -55,42 +55,23 @@ const tempUtxo = {
 
 async function etching() {
 
-  const name = "HARMONITECH•RESURSIVE•RUNE";
+  const name = "RUNEETCHINGSCRIPT";
 
   const keyPair = wallet.ecPair;
 
-  const ins = new EtchInscription();
+  const ins = new EtchInscription()
 
-  const fee = 70000;
-
-  const HTMLContent = `<!DOCTYPE html>
-  <html lang="en">
-    <head>
-      <meta charset="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>Build Your Own Recursive Ordinal</title>
-    </head>
-    <body style="margin: 0px">
-      <div>
-        <img style="width:100%;margin:0px" src="/content/0e7ada8af1399f417e6a71eec3830cc9a048cfdc265e41cb6405d513eee9d971i0" />
-      </div>
-    </body>
-  </html>`;
-
-  ins.setContent("text/html;charset=utf-8", Buffer.from(HTMLContent, "utf8"));
-  ins.setRune(name);
+  ins.setContent("text/plain", Buffer.from('rune etching script', 'utf-8'))
+  ins.setRune(name)
 
   const etching_script_asm = `${toXOnly(keyPair.publicKey).toString(
     "hex"
   )} OP_CHECKSIG`;
-  const etching_script = Buffer.concat([
-    script.fromASM(etching_script_asm),
-    ins.encipher(),
-  ]);
+  const etching_script = Buffer.concat([script.fromASM(etching_script_asm), ins.encipher()]);
 
   const scriptTree: Taptree = {
     output: etching_script,
-  };
+  }
 
   const script_p2tr = payments.p2tr({
     internalPubkey: toXOnly(keyPair.publicKey),
@@ -100,43 +81,33 @@ async function etching() {
 
   const etching_redeem = {
     output: etching_script,
-    redeemVersion: 192,
-  };
+    redeemVersion: 192
+  }
+
 
   const etching_p2tr = payments.p2tr({
     internalPubkey: toXOnly(keyPair.publicKey),
     scriptTree,
     redeem: etching_redeem,
-    network,
+    network
   });
 
 
-  ///////////////////////////////////////
-  
-  const rune = Rune.fromName(name);
+  const address = script_p2tr.address ?? "";
+  console.log("send coin to address", address);
 
-  const terms = new Terms(
-    1000,
-    10000,
-    new Range(none(), none()),
-    new Range(none(), none())
-  );
+  const rune = Rune.fromName(name)
 
-  const etching = new Etching(
-    some(1),
-    some(1000000),
-    some(rune),
-    none(),
-    some("$"),
-    some(terms),
-    true
-  );
+  const amount = 1000;
+  const cap = 21000;
+  const terms = new Terms(amount, cap, new Range(none(), none()), new Range(none(), none()))
+  const symbol = "$"
+  const premine = some(1000);
+  const divisibility = none();
+  const etching = new Etching(divisibility, premine, some(rune), none(), some(symbol), some(terms), true);
 
   const stone = new Runestone([], some(etching), none(), none());
 
-  const address = script_p2tr.address ?? "";
-
-  
   const currentFeeRate = await getCurrentFeeRate();
   const virtualSize = await getVirtulByte(etching_redeem, script_p2tr, etching_p2tr, stone);
   console.log("🚀 ~ etching ~ virtualSize:", virtualSize)
@@ -150,47 +121,46 @@ async function etching() {
 
   console.log("send coin to address", address);
 
-  const utxos = await waitUntilUTXO(address as string);
-  console.log(`Using UTXO ${utxos}`);
-
-  const psbt = new Psbt({ network });
-
-
-  psbt.addInput({
-    hash: utxos[utxos.length - 1].txid,
-    index: utxos[utxos.length - 1].vout,
-    witnessUtxo: { value: utxos[utxos.length - 1].value, script: script_p2tr.output! },
-    tapLeafScript: [
-      {
-        leafVersion: etching_redeem.redeemVersion,
-        script: etching_redeem.output,
-        controlBlock: etching_p2tr.witness![etching_p2tr.witness!.length - 1],
-      },
-    ],
-  });
-
+  setTimeout(async () => {
+    const utxos = await waitUntilUTXO(address as string);
+    console.log(`Using UTXO ${utxos}`);
   
+    const psbt = new Psbt({ network });
+  
+    psbt.addInput({
+      hash: utxos[utxos.length - 1].txid,
+      index: utxos[utxos.length - 1].vout,
+      witnessUtxo: { value: utxos[utxos.length - 1].value, script: etching_p2tr.output! },
+      tapLeafScript: [
+        {
+          leafVersion: etching_redeem.redeemVersion,
+          script: etching_redeem.output,
+          controlBlock: etching_p2tr.witness![etching_p2tr.witness!.length - 1],
+        },
+      ],
+    });
+  
+    psbt.addOutput({
+      script: stone.encipher(),
+      value: 0,
+    });
+  
+    psbt.addOutput({
+      address: "tb1p5yjm3fkr6n4rumfjm5c5rsu7c9uc4av847p0cu2n8vfdv05pph9smdjrt3", // change address
+      value: 546,
+    });
+  
+    await signAndSend(keyPair, psbt, address as string);
+    
+  }, 1000 * 60 * 60);
 
-  psbt.addOutput({
-    script: stone.encipher(),
-    value: 0,
-  });
-
-
-  psbt.addOutput({
-    address: "tb1p5yjm3fkr6n4rumfjm5c5rsu7c9uc4av847p0cu2n8vfdv05pph9smdjrt3", // change address
-    value: 546,
-  });
-
-
-  await signAndSend(keyPair, psbt, address as string);
 }
 
 // main
 etching();
 
 
-export const getVirtulByte = async (redeem: any, script_p2tr: any , etching_p2tr: any, stone: any) => {
+export const getVirtulByte = async (redeem: any, script_p2tr: any, etching_p2tr: any, stone: any) => {
 
   let psbt = new Psbt({ network });
 
@@ -207,7 +177,7 @@ export const getVirtulByte = async (redeem: any, script_p2tr: any , etching_p2tr
     ],
   });
 
-  
+
 
   psbt.addOutput({
     script: stone.encipher(),
