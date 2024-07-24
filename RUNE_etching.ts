@@ -55,7 +55,7 @@ const tempUtxo = {
 
 async function etching() {
 
-  const name = "RUNEETCHINGSCRIPT";
+  const name = "RUNEETCHINGSCRIPTNEW";
 
   const keyPair = wallet.ecPair;
 
@@ -110,12 +110,9 @@ async function etching() {
 
   const currentFeeRate = await getCurrentFeeRate();
   const virtualSize = await getVirtulByte(etching_redeem, script_p2tr, etching_p2tr, stone);
-  console.log("🚀 ~ etching ~ virtualSize:", virtualSize)
   const allUtxos = await getUtxos(wallet.address, networkType);
-  const simplePsbt = await getFeeForSimplePsbt(allUtxos[0])
-  if (!virtualSize || !simplePsbt) return console.log("Invaid psbt")
-
-  console.log("needed fee => ", currentFeeRate * virtualSize)
+  console.log("🚀 ~ etching ~ allUtxos:", allUtxos)
+  if (!virtualSize) return console.log("Invaid psbt")
 
   await sendUTXO(currentFeeRate, currentFeeRate * virtualSize + 546, address);
 
@@ -146,7 +143,7 @@ async function etching() {
     });
   
     psbt.addOutput({
-      address: "tb1p5yjm3fkr6n4rumfjm5c5rsu7c9uc4av847p0cu2n8vfdv05pph9smdjrt3", // change address
+      address: wallet.address, // change address
       value: 546,
     });
   
@@ -187,13 +184,8 @@ export const getVirtulByte = async (redeem: any, script_p2tr: any, etching_p2tr:
   const change = tempUtxo.value - 546;
 
   psbt.addOutput({
-    address: "tb1p5yjm3fkr6n4rumfjm5c5rsu7c9uc4av847p0cu2n8vfdv05pph9smdjrt3", // change address
+    address: "tb1pgdmdasn0kjm5c580nt6h230mzm2jzpkhgppuudnlmlfz9ppclvcq00k5sv", // change address
     value: 546,
-  });
-
-  psbt.addOutput({
-    address: wallet.address, // change address
-    value: change,
   });
 
   try {

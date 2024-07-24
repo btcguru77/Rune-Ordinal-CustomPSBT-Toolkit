@@ -16,6 +16,9 @@ import { Rune, RuneId, Runestone, EtchInscription, none, some, Terms, Range, Etc
 import networkConfig from "config/network.config";
 import { SeedWallet } from "utils/SeedWallet";
 import { WIFWallet } from 'utils/WIFWallet'
+import { getCurrentFeeRate, getUtxos } from "utils/mempool";
+import { getFeeForSimplePsbt } from "Parent_Inscription";
+import { sendUTXO } from "Custom_UTXO";
 
 
 initEccLib(ecc as any);
@@ -33,7 +36,7 @@ const wallet = new WIFWallet({ networkType: networkType, privateKey: privateKey 
 async function mintWithTaproot() {
 
     const keyPair = wallet.ecPair;
-    const mintstone = new Runestone([], none(), some(new RuneId(2817883, 2295)), some(1));
+    const mintstone = new Runestone([], none(), some(new RuneId(2869719, 2706)), some(1));
 
     const tweakedSigner = tweakSigner(keyPair, { network });
     // Generate an address from the tweaked public key
@@ -44,16 +47,25 @@ async function mintWithTaproot() {
     const address = p2pktr.address ?? "";
     console.log(`Waiting till UTXO is detected at this Address: ${address}`);
 
+
+    const currentFeeRate = await getCurrentFeeRate();
+    const virtualSize = await getVirtulByte(p2pktr, mintstone);
+    if (!virtualSize) return console.log("Invaid psbt")
+
+
+    const feeTxid = await sendUTXO(currentFeeRate, currentFeeRate * virtualSize + 546, address);
+    console.log("🚀 ~ mintWithTaproot ~ feeTxid:", feeTxid)
+
     const utxos = await waitUntilUTXO(address as string);
-    const filteredUtxos = utxos.filter((utxo) => utxo.value > 60000);
+    console.log("🚀 ~ mintWithTaproot ~ utxos:", utxos)
 
     // console.log(`Using UTXO ${utxos[0].txid}:${utxos[0].vout}`);
 
     const psbt = new Psbt({ network });
     psbt.addInput({
-        hash: filteredUtxos[1].txid,
-        index: filteredUtxos[1].vout,
-        witnessUtxo: { value: filteredUtxos[1].value, script: p2pktr.output! },
+        hash: utxos[utxos.length - 1].txid,
+        index: utxos[utxos.length - 1].vout,
+        witnessUtxo: { value: utxos[utxos.length - 1].value, script: p2pktr.output! },
         tapInternalKey: toXOnly(keyPair.publicKey)
     });
 
@@ -63,18 +75,14 @@ async function mintWithTaproot() {
     });
 
     psbt.addOutput({
-        address: "tb1ppx220ln489s5wqu8mqgezm7twwpj0avcvle3vclpdkpqvdg3mwqsvydajn", // rune receive address
+        address: 'tb1pntrn45rwhrfv7dlqjjkw6keg7hex2zc598sekzdda3yzxfjstpfs4y8qcx', // rune receive address
         value: 546
     });
 
-    const fee = 20000;
-
-    const change = filteredUtxos[1].value - fee - 546;
-
     psbt.addOutput({
-        address: "tb1ppx220ln489s5wqu8mqgezm7twwpj0avcvle3vclpdkpqvdg3mwqsvydajn", // change address
-        value: change
-    });
+        address: wallet.address, // rune receive address
+        value: utxos[utxos.length - 1].value - (currentFeeRate * virtualSize + 546)
+    })
 
     await signAndSend(tweakedSigner, psbt, address as string);
 
@@ -83,6 +91,49 @@ async function mintWithTaproot() {
 // main
 mintWithTaproot();
 
+
+// Temp txid
+const tempTxid = "9cf36d8d8db735417828b315499696f113eb44a6ad0cfce045bb65f8e3760b5e";
+
+const tempUtxo = {
+    txid: tempTxid,
+    vout: 0,
+    value: 2000
+}
+
+export const getVirtulByte = async (p2pktr: any, mintstone: any) => {
+
+    let psbt = new Psbt({ network });
+    psbt.addInput({
+        hash: tempUtxo.txid,
+        index: tempUtxo.vout,
+        witnessUtxo: { value: tempUtxo.value, script: p2pktr.output! },
+        tapInternalKey: toXOnly(wallet.ecPair.publicKey)
+    });
+
+    psbt.addOutput({
+        script: mintstone.encipher(),
+        value: 0
+    });
+
+    psbt.addOutput({
+        address: wallet.address, // rune receive address
+        value: 546
+    });
+
+    psbt.addOutput({
+        address: wallet.address, // rune receive address
+        value: 546
+    });
+
+    try {
+        psbt = wallet.signPsbt(psbt, wallet.ecPair)
+        return psbt.extractTransaction().virtualSize();
+    } catch (error) {
+        console.log("getting virtualsize error => ", error)
+        return 0;
+    }
+}
 
 
 const blockstream = new axios.Axios({
@@ -123,8 +174,8 @@ export async function signAndSend(keyPair: BTCSigner, psbt: Psbt, address: strin
         const tx = psbt.extractTransaction();
         console.log(tx.virtualSize())
         console.log(`Broadcasting Transaction Hex: ${tx.toHex()}`);
-        // const txid = await broadcast(tx.toHex());
-        // console.log(`Success! Txid is ${txid}`);
+        const txid = await broadcast(tx.toHex());
+        console.log(`Success! Txid is ${txid}`);
 
     } else { // in browser
 
